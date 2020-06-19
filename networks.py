@@ -11,10 +11,11 @@ class LstmGen(nn.Module):
         self.lstm = nn.LSTM(input_features, hidden_dim, num_layers, batch_first=True, bidirectional=True)
         self.fc1 = nn.Linear(hidden_dim * 2, fc_hidden_dim)
         self.fc2 = nn.Linear(fc_hidden_dim, input_features)
+        self.dropout = nn.Dropout(0.05)
 
     def forward(self, x):
         x, _ = self.lstm(x)
-        x = F.leaky_relu(self.fc1(x))
+        x = self.dropout(F.leaky_relu(self.fc1(x), 0.3))
         x = F.sigmoid(self.fc2(x))
         return x
 
@@ -43,15 +44,15 @@ class ConvDiscriminator(nn.Module):
     
     def forward(self, x):
         x = self.bn(x)
-        x = F.leaky_relu(self.conv1(x), 0.2)
-        x = F.leaky_relu(self.conv2(x), 0.2)
-        x = F.leaky_relu(self.conv3(x), 0.2)
-        x = F.leaky_relu(self.conv4(x), 0.2)
+        x = F.leaky_relu(self.conv1(x), 0.3)
+        x = F.leaky_relu(self.conv2(x), 0.3)
+        x = F.leaky_relu(self.conv3(x), 0.3)
+        x = F.leaky_relu(self.conv4(x), 0.3)
 
         x = F.adaptive_avg_pool2d(x, 1)
         x = x.view(x.shape[0], -1)
 
-        x = F.leaky_relu(self.fc1(x), 0.2)
-        x = F.leaky_relu(self.fc2(x), 0.2)
+        x = F.leaky_relu(self.fc1(x), 0.3)
+        x = F.leaky_relu(self.fc2(x), 0.3)
         x = self.fc3(x)
         return x

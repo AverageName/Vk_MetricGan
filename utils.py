@@ -16,6 +16,83 @@ from scipy import signal
 from scipy.io import wavfile
 
 
+def validation_metrics(model, val_dataloader, logs, val_best):
+
+    model.eval()
+    running_pesq = 0.0
+    running_stoi = 0.0
+    stois = []
+    for idx, batch in enumerate(val_dataloader):
+        with torch.no_grad():
+            
+            denoised = model(batch)
+            denoised = np.multiply(denoised.squeeze(0).cpu().numpy().transpose(), np.exp(1j*batch['phase'].numpy()))
+            denoised_1d = librosa.istft(np.squeeze(denoised, 0), hop_length=256,
+                                    win_length=512, window=scipy.signal.hamming, length=batch['clean_array'].shape[1])
+            
+            maxv = np.iinfo(np.int16).max
+            denoised_1d = denoised_1d/np.max(abs(denoised_1d))
+            denoised_1d = (denoised_1d * maxv).astype(np.int16)
+
+            clean_1d = batch['clean_array'].squeeze(0).numpy()
+
+            #pesq = Q("pesq", clean_1d, denoised_1d, batch["sample_rate"])
+            stoi = Q("stoi", clean_1d, denoised_1d, batch["sample_rate"])
+
+            #running_pesq += pesq
+            running_stoi += stoi
+    
+    #mean_pesq = running_pesq / len(val_dataloader)
+    #mean_pesq = mean_pesq * 5.0 - 0.5
+    mean_stoi = running_stoi / len(val_dataloader)
+
+    # if mean_pesq > val_best:
+    #     val_best = mean_pesq
+    #     torch.save(model.state_dict(), '/content/drive/My Drive/best_gan_checkp_pesq.pt')
+
+    #logs["val_pesq"] = mean_pesq
+    logs["val_stoi"] = mean_stoi
+
+    return logs, val_best
+
+
+class AudioDataset(Dataset):
+
+    def __init__(self, path_to_clean, path_to_noisy, limit=-1, val=False, clean_clean=False):
+
+        self.clean_wavs = glob.glob(os.path.join(path_to_clean, "*.wav"))[:limit]
+        self.path_to_noisy = path_to_noisy
+        self.path_to_clean = path_to_clean
+        self.val = val
+        self.clean_clean = clean_clean
+
+    def __len__(self):
+        return len(self.clean_wavs)
+
+    def __getitem__(self, idx):
+
+        clean_audio_path = self.clean_wavs[idx % len(self.clean_wavs)]
+        wav_name = clean_audio_path.rsplit('/', 1)[-1]
+
+        array, sample_rate = convert_audio_to_array(clean_audio_path)
+        spectr, phase_train, _ = get_spectr_and_phase(array, norm=True)
+        spectr_wo_norm, _, _ = get_spectr_and_phase(array, norm=False)
+        spectr_wo_norm = np.squeeze(spectr_wo_norm, 0)
+        spectr = np.squeeze(spectr, 0)
+
+        noisy_audio_path = os.path.join(self.path_to_noisy, wav_name)
+
+        noisy_array, sample_rate = convert_audio_to_array(noisy_audio_path)
+        spectr_noisy, phase_noisy, _ = get_spectr_and_phase(noisy_array, norm=True)
+        spectr_noisy_wo_norm, _, _ = get_spectr_and_phase(noisy_array, norm=False)
+        spectr_noisy_wo_norm = np.squeeze(spectr_noisy_wo_norm, 0)
+        spectr_noisy = np.squeeze(spectr_noisy, 0)
+
+        return {'clean': spectr, 'noisy': spectr_noisy, 'noisy_wo_norm': spectr_noisy_wo_norm,
+                'clean_wo_norm': spectr_wo_norm, 'phase': phase_noisy,
+                'clean_array': array, 'sample_rate': sample_rate, 'clean_clean': self.clean_clean}
+
+
 class Timit(Dataset):
 
     def __init__(self, path_to_clean, path_to_noisy):
@@ -59,13 +136,14 @@ class Timit(Dataset):
 
 
         return {'clean': spectr, 'noisy': spectr_noisy, 'noisy_wo_norm': spectr_noisy_wo_norm,
-                'clean_wo_norm': spectr_wo_norm, 'phase': phase_noisy, 'clean_array': array, 'sample_rate': sample_rate}
+                'clean_wo_norm': spectr_wo_norm, 'phase': phase_noisy,
+                'clean_array': array, 'sample_rate': sample_rate, 'clean_clean': False}
 
 
 def Q(mode, clean, denoised, sr):
     if mode == "pesq":
         #Figure out wb and nb what is it
-        return pesq(sr, clean, denoised, 'wb')
+        return (pesq(sr, clean, denoised, 'wb') + 0.5)/5.0
     elif mode == "stoi":
         #criterion = NegSTOILoss(sample_rate=sr)
         #print(criterion(torch.from_numpy(denoised).unsqueeze(0), torch.from_numpy(clean).unsqueeze(0)))
@@ -108,6 +186,7 @@ def generate_noisy_wavs(path_to_clean_wavs, clean_limit, snrs, path_to_noises, n
 
 def convert_audio_to_array(wav_path):
     samples, sample_rate = sf.read(wav_path)
+    #samples, sample_rate = librosa.load(wav_path, sr=16000)
     return samples, sample_rate
 
 

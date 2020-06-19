@@ -31,36 +31,44 @@ class MetricGan(nn.Module):
 
         denoised = self.forward(batch)
         logits = self.D(torch.stack([denoised, clean_wo_norm], dim=1))
-        #print(logits)
-        #Magical number 1
+
         loss = torch.sum((logits - 1.0)**2)
         loss.backward()
     
         return loss.item()
 
     def backward_D(self, batch):
+        maxv = np.iinfo(np.int16).max 
         clean_wo_norm = batch["clean_wo_norm"].to(self.device)
 
-        denoised = self.forward(batch).detach()
+        if not batch['clean_clean']:
+            denoised = self.forward(batch).detach()
 
-        logits_noise = self.D(torch.stack([denoised, clean_wo_norm], dim=1))
-        logits_clean = self.D(torch.stack([clean_wo_norm, clean_wo_norm], dim=1))
+            logits = self.D(torch.stack([denoised, clean_wo_norm], dim=1))
 
-        denoised = np.multiply(denoised.squeeze(0).cpu().numpy().transpose(), np.exp(1j*batch['phase'].numpy()))
-        denoised_1d = librosa.istft(np.squeeze(denoised, 0), hop_length=256,
-                                    win_length=512, window=scipy.signal.hamming, length=batch['clean_array'].shape[1])
+            denoised = np.multiply(denoised.squeeze(0).cpu().numpy().transpose(), np.exp(1j*batch['phase'].numpy()))
+            denoised_1d = librosa.istft(np.squeeze(denoised, 0), hop_length=256,
+                                        win_length=512, window=scipy.signal.hamming, length=batch['clean_array'].shape[1])
+            
+            denoised_1d = denoised_1d/np.max(abs(denoised_1d))
+            denoised_1d = (denoised_1d * maxv).astype(np.int16)
+
+
+            clean_1d = batch['clean_array'].squeeze(0).numpy()
+
+            ground_truth = Q(self.metric, clean_1d, denoised_1d, batch['sample_rate'])
         
-
-        clean_1d = batch['clean_array'].squeeze(0).numpy()
-
-        metrics_noise = Q(self.metric, clean_1d, denoised_1d, batch['sample_rate'])
-        
-        if self.metric == "pesq":
-            metrics_clean = Q(self.metric, clean_1d, clean_1d, batch['sample_rate'])
         else:
-            metrics_clean = 1
+            logits = self.D(torch.stack([clean_wo_norm, clean_wo_norm], dim=1))
+        
+            ground_truth = 1.0
 
-        loss = (logits_noise - metrics_noise)**2 + (logits_clean - metrics_clean)**2
+        loss = (logits - ground_truth)**2
         loss.backward()
 
         return loss.item()
+
+
+
+
+
